@@ -43,8 +43,27 @@ import gzip
 import logging
 import sys
 
-import psycopg
-import psycopg.types.hstore
+try:
+  import psycopg
+  import psycopg.types.hstore
+
+  def register_hstore(conn):
+    info = psycopg.types.TypeInfo.fetch(conn, "hstore")
+    psycopg.types.hstore.register_hstore(info, conn)
+
+  def dict_cursor(conn):
+    return conn.cursor(row_factory=psycopg.rows.dict_row)
+
+except ImportError:
+  print('WARNING: enabling psycopg2 compatibility mode.')
+  import psycopg2 as psycopg
+  import psycopg2.extras
+
+  def register_hstore(conn):
+    psycopg2.extras.register_hstore(conn)
+
+  def dict_cursor(conn):
+    return conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
 LOG = logging.getLogger()
 
@@ -146,7 +165,7 @@ def insert_ifopt(conn, osm_id, ifopt, names, wp_title, invalidate):
 def update_artificial(conn, node_id, names, address, extratags, lon, lat, invalidate):
   """ Update an existing artificial node with new information, if necessary.
   """
-  with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+  with dict_cursor(conn) as cur:
     cur.execute("""SELECT place_id, name, address, extratags,
                               ST_X(geometry) as lon, ST_Y(geometry) as lat
                        FROM placex
@@ -323,10 +342,10 @@ def main():
                       datefmt='%Y-%m-%d %H:%M:%S',
                       level=max(3 - args.verbose, 1) * 10)
 
-  with psycopg.connect(dbname=args.database, user=args.username,
-                       host=args.host, port=args.port, password=args.password) as conn:
-    info = psycopg.types.TypeInfo.fetch(conn, "hstore")
-    psycopg.types.hstore.register_hstore(info, conn)
+  conn = psycopg.connect(dbname=args.database, user=args.username,
+                         host=args.host, port=args.port, password=args.password)
+  try:
+    register_hstore(conn)
 
     if args.importance_baseline > 0:
       with open_file(args.infile) as csvfile:
@@ -334,7 +353,8 @@ def main():
 
     with open_file(args.infile) as csvfile:
       return import_pt(conn, csvfile, args.invalidate)
-
+  finally:
+    conn.close()
 
 if __name__ == '__main__':
   sys.exit(main())
